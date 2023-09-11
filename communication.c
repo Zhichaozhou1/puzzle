@@ -10,6 +10,7 @@
 #define BILLION 1000000000.0
 #define MILLION 1000000.0
 #define THOUSAND 1000.0
+#define data_file "msg_delay.txt"
 /*Define the structure of socket*/
 typedef struct struct_send_sock{
         int sock; //socket descriptor
@@ -38,6 +39,7 @@ struct timespec time_recv[size_queue_max];
 struct timespec time_process[size_queue_max];
 struct timespec time_end[size_queue_max];
 double msg_delay[size_queue_max];
+unsigned char challenge[65] = {'\0'};
 int cnt_msg_recv = 0;
 int cnt_msg_end = 0;
 int valid_msg_end = 0;
@@ -53,6 +55,7 @@ int main(int argc, char* argv[]){
         queue_msg_header = initLink();
         queue_msg_rear = queue_msg_header;
         ht = hash_table_new();
+        strcpy(challenge,rsu_key_initial);
         void *recv_message(void*);
         void *send_message(void*);
         //Create 3 threads
@@ -93,12 +96,12 @@ int init_socket(char* IP_des,int Port_src,char* message,char* pubkey_addr, char*
         //Set address
         memset(&sock_this.addr_this, 0, sizeof(sock_this.addr_this)); //Clear memory
         memset(&sock_target.addr_target, 0, sizeof(sock_target.addr_target));
-        sock_this.addr_this.sin_port = htons(Port_src); //Convert the unsigned short integer from host byte order to network byte order
+        sock_this.addr_this.sin_port = htons(Port_des); //Convert the unsigned short integer from host byte order to network byte order
         sock_this.addr_this.sin_addr.s_addr = INADDR_ANY; //Set the address INADDR_ANY instead of indicating the exact address number
         sock_this.addr_this.sin_family = AF_INET;   //Use IPv4
         sock_this.pubkey_addr = pubkey_addr;
 
-        sock_target.addr_target.sin_port = htons(Port_des);
+        sock_target.addr_target.sin_port = htons(Port_src);
         sock_target.addr_target.sin_addr.s_addr = inet_addr(IP_des); //Convert the unsigned short integer from host byte order to network byte order
         sock_target.addr_target.sin_family = AF_INET;   //Use IPv4
         sock_target.message = message;
@@ -120,6 +123,10 @@ int init_socket(char* IP_des,int Port_src,char* message,char* pubkey_addr, char*
 void* recv_message (void *sock){
         Sock_this *sock_this = (Sock_this *)sock;
         struct sockaddr_in addr_others;
+        unsigned char hash[32] = {'\0'};
+        unsigned char hash_encode[65] = {'\0'};
+        unsigned char challenge_recv[65] = {'\0'};
+        int hash_len;
         char message_recv[size_message] = {'\0'}; //Buffer storing received messages
         while(1){
                 int flag;
@@ -129,27 +136,70 @@ void* recv_message (void *sock){
                 //recvfrom returns the number of bytes received, but -1 when errors.
                 if (flag >= 0){
                         printf("Message received: %s\n",message_recv);
-                        clock_gettime(CLOCK_REALTIME, &(time_recv[cnt_msg_recv]));
-                        cnt_msg_recv++;
+                        //clock_gettime(CLOCK_REALTIME, &(time_recv[cnt_msg_recv]));
+                        //cnt_msg_recv++;
                 } else {
                         printf("Receiving failed.\n");
                     exit(1);
                 }
-                queue_msg_rear = insertElem(queue_msg_rear, message_recv);
+                if(strlen(message_recv)<100)//from RSU
+                {
+                        EVP(message_recv,hash,&hash_len);
+                        for (int j = 0; j < 32 ; j++){
+                                snprintf(hash_encode+2*j, sizeof(hash_encode)-2*j, "%02x", hash[j]);
+                        }
+                        if(strcmp(hash_encode,challenge)==0)
+                        {
+                                printf("challenge update!\n");
+                                strcpy(challenge,message_recv);
+                        }
+                }
+                else
+                {
+                         for(int i= 0; i < strlen(message_recv); i++)
+                        {
+                                if(message_recv[i] != '|')
+                                {
+                                        challenge_recv[i] = message_recv[i];
+                                }
+                                else
+                                {
+                                        break;
+                                }
+                        }
+                        if(strcmp(challenge_recv,challenge)==0)
+                        {
+                                EVP(message_recv,hash,&hash_len);
+                                for (int j = 0; j < 32 ; j++){
+                                        snprintf(hash_encode+2*j, sizeof(hash_encode)-2*j, "%02x", hash[j]);
+                                }
+                                if(hash_encode[63]=='0'&&hash_encode[62]=='0')//&&(digest_encode[61]=='0'))
+                                {
+                                        printf("pre-authentication pass!");
+                                        queue_msg_rear = insertElem(queue_msg_rear, message_recv);
+                                        clock_gettime(CLOCK_REALTIME, &(time_recv[cnt_msg_recv]));
+                                        cnt_msg_recv++;
+                                }
+                        }
+                }
         }
         close(sock_this->sock);
 }
 
 /*Function to send messages*/
 void* send_message (void*sock){
+        char beacon_send[1024] = {'\0'};
         Sock_target *sock_target = (Sock_target *)sock;
         char* message_send = sock_target->message;
-        printf("%s\n",message_send);
+        //printf("%s\n",message_send);
         char message_base64_send[size_message] = {'\0'};
         PCGen(sock_target->prikey_addr,sock_target->pubkey_addr);
         //BaseLineSendMain(message_send, message_base64_send); //Generate and get the whole Base64 message
         while(1){
-                message_sign(message_send,message_base64_send,1,sock_target->prikey_addr,sock_target->pubkey_addr);
+                strcpy(beacon_send,challenge);
+                strcat(beacon_send,"|");
+                strcat(beacon_send,message_send);
+                message_sign(beacon_send,message_base64_send,1,sock_target->prikey_addr,sock_target->pubkey_addr);
                 if (sendto(sock_target->sock, message_base64_send, strlen(message_base64_send), 0,
                                 (struct sockaddr *)&(sock_target->addr_target), sock_target->addr_len_target )  < 0){
                         printf("Sending failed.\n");
@@ -203,14 +253,14 @@ void *process(){
                 queue_msg_header = queue_msg_header->next;
                 queue_msg_header->str = NULL;
                 free(temp);
-                /*if (flag==1){
+                if (valid_msg_end==100){
                         FILE *fp = fopen(data_file, "wb");
                         for (int i = 0; i < valid_msg_end; i++) {
                             fprintf(fp, "%d %fms\n", i, msg_delay[i]);
                             // check for error here too
                         }
                         fclose(fp);
-                }*/
+                }
         }
 }
 
