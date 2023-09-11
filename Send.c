@@ -2,19 +2,26 @@
 extern struct timespec time_PC_gen;
 int message_sign(unsigned char beacon[], unsigned char base64message[], int flag, unsigned char* prikey_addr, unsigned char* pubkey_addr)
 {
+        char *random_seed = "0123456789ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz";
+        int seed_length = strlen(random_seed);
+        char ss[2] = {'\0'};
         unsigned char beacon_signature_buff[1024]={'\0'};
         unsigned char* beacon_signature_buff_pp = beacon_signature_buff;
         unsigned char Base64Message[1024]={'\0'};
         unsigned char beacon_signature_buff_base64[1024]={'\0'};
         unsigned char PC_encode[1024] = {'\0'};
+        unsigned char hash_beacon[1024] = {'\0'};
+        unsigned char hash_beacon_encode[1024] = {'\0'};
+        int hash_beacon_length;
         int beacon_len = strlen(beacon);
         int beacon_sig_len = 0;
+        //int find_solution = 0;
         /* Read private key form prikey.pem */
         FILE *f = fopen(prikey_addr, "r");
         EC_KEY *ec_prikey = PEM_read_ECPrivateKey(f, NULL, NULL, NULL);
         fclose(f);
         if (ec_prikey == NULL)
-        {
+                {
                 printf("Error：PEM_read_ECPrivateKey()\n");
                 return 0;
         }
@@ -46,6 +53,37 @@ int message_sign(unsigned char beacon[], unsigned char base64message[], int flag
                         KeyID[i]=PC_encode[i];
                 }
                 strcat(Base64Message, KeyID);
+        }
+        for(int i = 1; i <= 8; i++){
+                sprintf(ss,"%c",random_seed[(rand()%seed_length)]);
+                strcat(Base64Message,ss);
+        }
+        int beacon_length = strlen(Base64Message);
+        while(1)
+        {
+                EVP(Base64Message,hash_beacon, &hash_beacon_length);
+                for (int j = 0; j < 32 ; j++){
+                        snprintf(hash_beacon_encode+2*j, 64+1-2*j, "%02x", hash_beacon[j]);
+                }
+                if(hash_beacon_encode[63]=='0'&&hash_beacon_encode[62]=='0')//&&(digest_encode[61]=='0'))
+                {
+                        break;
+                }
+                if(Base64Message[beacon_length-1]!='z')
+                {
+                        Base64Message[beacon_length-1] = Base64Message[beacon_length-1] + 1;
+                }
+                else if(Base64Message[beacon_length-2]!='z')
+                {
+                        Base64Message[beacon_length-1] = '!';
+                        Base64Message[beacon_length-2] = Base64Message[beacon_length-2] + 1;
+                }
+                else
+                {
+                        Base64Message[beacon_length-1] = '!';
+                        Base64Message[beacon_length-2] = '!';
+                        Base64Message[beacon_length-3] = Base64Message[beacon_length-3] + 1;
+                }
         }
         strcpy(base64message, Base64Message);
         return 1;
