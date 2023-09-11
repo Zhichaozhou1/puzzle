@@ -58,25 +58,32 @@ int main(int argc, char* argv[]) {
 /*Function to send messages*/
 void* send_message (void *sock){
         int number=0;
+        int number_send = 0;
         int hash_len = 0;
         unsigned char hash[32] = {'\0'};
-        unsigned char hash_encode[1001][64];
+        //unsigned char hash_temp[65] = {'\0'};
+        unsigned char hash_encode[1001][65] = {'\0'};
         //hash_encode = malloc((keychain_len+1)*sizeof(char*));
         strcpy(hash_encode[0],test_seed);
         Sock_target *sock_target = (Sock_target *)sock;
-        for(int i; i<keychain_length; i++)
+        for(int i=0; i<keychain_length; i++)
         {
                 EVP(hash_encode[i],hash,&hash_len);
-                base64_encode(hash, hash_len, hash_encode[i+1]);
+                for (int j = 0; j < 32 ; j++){
+                        snprintf(hash_encode[i+1]+2*j, sizeof(hash_encode[i+1])-2*j, "%02x", hash[j]);
+                }
+                //printf("%s\n",hash_encode[i]);
+                //base64_encode(hash, hash_len, hash_encode[i+1]);
         }
         while(1){
                 //printf("Start sending.\n");
-                if (sendto(sock_target->sock, hash_encode[number], strlen(hash_encode[number])+1, 0,
+                number_send = number/10;
+                if (sendto(sock_target->sock, hash_encode[keychain_length-number_send], strlen(hash_encode[keychain_length-number_send])+1, 0,
                                 (struct sockaddr *)&(sock_target->addr_target), sock_target->addr_len_target )  < 0){
                         printf("Sending failed.\n");
                         exit(1);
                 }
-                printf("Message sent: %s\n", hash_encode[number]);
+                //printf("Message sent: %s\n", hash_encode[keychain_length-number_send]);
                 number++;
                 usleep(interval_sending_ms*1000); //Sleep for some time
         }
