@@ -1,23 +1,14 @@
 #include "lab.h"
 
-/*****************************************************************************
- * Function Name: BaseLineReceiveMain
- * Description: Main function in base line verification
- *
- * Parameter:
- * @ base64_receive:    Receice base64 message
- * Return
- * @ 1: Verification Success
- * @ 0: Function error
-*/
-int message_receive(unsigned char base64_receive[], link_list * p)
+
+int message_process(unsigned char base64_receive[], struct HashTable_PC* ht)
 {
-        int i = 0;
-        int j;
+        int i,j;
         char PC_store[1024] = {'\0'};
         char PC_store_KeyID[10] = {'\0'};
         char PC_received_KeyID[10] = {'\0'};
         char* PC_st;
+        unsigned char challenge[1024] = {'\0'};
         unsigned char message[1024] = {'\0'};
         unsigned char message_sig[1024] = {'\0'};
         unsigned char KeyID[10] = {'\0'};
@@ -25,9 +16,21 @@ int message_receive(unsigned char base64_receive[], link_list * p)
         unsigned char ts[1024] = {'\0'};
         unsigned char te[1024] = {'\0'};
         unsigned char cert_sig[1024] = {'\0'};
-        unsigned char zero_buffer[1024] = {'\0'};       // Rewrite buffer to zero
+        unsigned char zero_buffer[1024] = {'\0'};
         /* Get receiving message segment */
         for(i = 0, j = 0; i < strlen(base64_receive); i++, j++)
+        {
+                if(base64_receive[i] != '|')
+                {
+                        challenge[j] = base64_receive[i];
+                }
+                else
+                {
+                        i++;
+                        break;
+                }
+        }
+        for(i, j = 0; i < strlen(base64_receive); i++, j++)
         {
                 if(base64_receive[i] != '|')
                 {
@@ -125,7 +128,6 @@ int message_receive(unsigned char base64_receive[], link_list * p)
         strcat(PC_base64, cert_sig);
         strcat(PC_base64, separator);
         /* Decode mesage */
-        int message_decode_len = 0;
         int message_sig_decode_len = 0;
         int KeyID_decode_len = 0;
         int pubkey_decode_len = 0;
@@ -139,8 +141,10 @@ int message_receive(unsigned char base64_receive[], link_list * p)
         unsigned char ts_decode[1024] = {'\0'};
         unsigned char te_decode[1024] = {'\0'};
         unsigned char cert_sig_decode[1024] = {'\0'};
-        strcpy(message_decode, message);
-        message_decode_len = strlen(message);
+        strcpy(message_decode, challenge);
+        strcat(message_decode, "|");
+        strcat(message_decode, message);
+        int message_decode_len = strlen(message_decode);
         message_sig_decode_len = base64_decode(message_sig, strlen(message_sig), message_sig_decode);
         KeyID_decode_len = base64_decode(KeyID, strlen(KeyID), KeyID_decode);
         pubkey_decode_len = base64_decode(pubkey, strlen(pubkey), pubkey_decode);
@@ -149,30 +153,11 @@ int message_receive(unsigned char base64_receive[], link_list * p)
         strcpy(te_decode, te);
         te_decode_len = strlen(te_decode);
         cert_sig_decode_len = base64_decode(cert_sig, strlen(cert_sig), cert_sig_decode);
-        printf("Received message is:\n%s\n", message_decode);
-        link_list* temp=p;
+        //printf("Received message is:\n%s\n", message_decode);
         int doespcstore = 0;
         int times = 1;
-        while (temp->next) {
-                temp=temp->next;
-                strcpy(PC_store,temp->str);
-                int key_num;
-                for(key_num=0;key_num<7;key_num++)
-                {
-                        PC_store_KeyID[key_num]=PC_store[key_num];
-                }
-                for(key_num=0;key_num<7;key_num++)
-                {
-                        PC_received_KeyID[key_num]=KeyID[key_num];
-                }
-                if(!strcmp(PC_store_KeyID, PC_received_KeyID) == 0)
-                {
-                        times = times + 1;
-                }
-                else{
-                        doespcstore = times;
-                }
-        }
+        doespcstore = hash_table_get(ht,KeyID,pubkey);
+        pubkey_decode_len = base64_decode(pubkey, strlen(pubkey), pubkey_decode);
         if (doespcstore == 0)                             // If PCSave is not same as PC receive
         {/* Verify Signatuer, if correct save as PCSave */
                 /* Get system time */
@@ -208,7 +193,7 @@ int message_receive(unsigned char base64_receive[], link_list * p)
                         pseudonym[i] = pubkey_decode[j];
                 }
                 /* read CA's public key from CA certificate*/
-                FILE *f = fopen("cacert.pem", "r");
+                FILE *f = fopen("ca.pem", "r");
                 X509 *x_509 = PEM_read_X509(f, NULL, NULL, NULL);
                 fclose(f);
                 if (x_509 == NULL)
@@ -243,17 +228,8 @@ int message_receive(unsigned char base64_receive[], link_list * p)
                         break;
                 case 1:
                         printf("Pseudonym Certificate Signature Verification Successful.\n");                 // Keep running if verification success
-                        link_list * temp_insert=(link_list*)malloc(sizeof(link_list));
-                        link_list * temp_locate=p;
-                        while (temp_locate->next) {
-                                temp_locate=temp_locate->next;
-                        }
-                        //printf("PC_base64:%s\n",PC_base64);
-                        char *msg_temp = (char *)malloc((strlen(PC_base64)+1)*1);
-                        strcpy(msg_temp, PC_base64);
-                        temp_insert->str = msg_temp;
-                        temp_insert->next = NULL;
-                        temp_locate->next = temp_insert;
+                        //printf("%s,%s,%s,%s\n",KeyID,ts,te,pubkey);
+                        hash_table_input(ht,KeyID,ts,te,pubkey);
                         break;
                 default:
                         break;
@@ -261,44 +237,8 @@ int message_receive(unsigned char base64_receive[], link_list * p)
         }
         else        // Use PCSave to verify Beacon Signature
         {
-                link_list* temp_pick=p;
-                for(int i = 0; i<doespcstore; i++){
-                        temp_pick=temp_pick->next;
-                }
-                /* Get PCSave message segment */
-                /* Reset value of KeyID and pubkey, because they are the value of receive message */
                 printf("Received PC already saved, then skip PC verification!\n");
-                strcpy(KeyID, zero_buffer);
-                strcpy(pubkey, zero_buffer);
-                unsigned char PCSave[1024] = {'\0'};
-                strcpy(PCSave,temp_pick->str);
-                for(i = 0, j = 0; i < strlen(PCSave); i++, j++)
-                {
-                        if(PCSave[i] != '|')
-                        {
-                                KeyID[j] = PCSave[i];
-                        }
-                        else
-                        {
-                                i++;
-                                break;
-                        }
-                }
-                for(i, j = 0; i < strlen(PCSave); i++, j++)
-                {
-                        if(PCSave[i] != '|')
-                        {
-                                pubkey[j] = PCSave[i];
-                        }
-                        else
-                        {
-                                i++;
-                                break;
-                        }
-                }
-                strcpy(pubkey_decode, zero_buffer);
-                //int pubkey_decode_len = 0;
-                pubkey_decode_len = base64_decode(pubkey, strlen(pubkey), pubkey_decode);
+                //pubkey_decode_len = base64_decode(pubkey, strlen(pubkey), pubkey_decode);
         }
 
 
@@ -311,7 +251,7 @@ int message_receive(unsigned char base64_receive[], link_list * p)
                 printf("Error：EC_KEY_new()\n");
                 return 0;
         }
-        if ((ec_group = EC_GROUP_new_by_curve_name(NID_X9_62_prime256v1)) == NULL)
+        if ((ec_group = EC_GROUP_new_by_curve_name(NID_brainpoolP256r1)) == NULL)
         {
                 printf("Error：EC_GROUP_new_by_curve_name()\n");
                 EC_KEY_free(ec_key);
